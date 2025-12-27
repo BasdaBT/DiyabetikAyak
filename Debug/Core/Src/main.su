@@ -1,0 +1,7 @@
+../Core/Src/main.c:61:5:main	120	static
+../Core/Src/main.c:155:10:ADC_to_Grams	32	static
+../Core/Src/main.c:172:6:CalculateRisk	88	static
+../Core/Src/main.c:203:6:SmartAnalysis	72	static
+../Core/Src/main.c:224:16:MLX90640_TestConnection	8	static
+../Core/Src/main.c:229:6:SystemClock_Config	88	static
+../Core/Src/main.c:252:6:Error_Handler	8	static
