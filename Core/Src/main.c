@@ -30,7 +30,16 @@
 /* USER CODE BEGIN PV */
 extern UART_HandleTypeDef huart3;
 extern ADC_HandleTypeDef hadc1;
-
+//bluetooth kontrolleri
+uint8_t rcmd;
+char cmd[32];
+uint8_t idxcmd;
+volatile uint8_t st_rst = 0;
+volatile uint8_t st_basla = 0;
+volatile uint8_t st_devam = 0;
+volatile uint8_t state = 0;
+//Ölçüm değişkenleri
+uint8_t prs = 0;
 // Termal Değişkenler
 static uint16_t eeMLX90640[832];
 static uint16_t frameData[834];
@@ -50,6 +59,7 @@ int measurementStep = 0;
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 static uint8_t MLX90640_TestConnection(void);
+void doReset(void);
 void SmartAnalysis(float *data, float *maxOut, int *idxOut);
 void CalculateRisk(float maxT1, float maxT2, uint32_t *p1, uint32_t *p2);
 uint32_t ADC_to_Grams(uint32_t adcVal);
@@ -71,7 +81,9 @@ int main(void)
   MX_ADC1_Init();
 
   /* USER CODE BEGIN 2 */
-  HAL_UART_Transmit(&huart3, (uint8_t*)"Jarvis: Sistem Kalibre Edildi. Butona basin...\r\n", 48, 100);
+  HAL_UART_Receive_IT(&huart3, &rcmd, 1);
+  idxcmd = 0;
+  HAL_UART_Transmit(&huart3, (uint8_t*)"Jarvis: Sistem Kalibre Edildi. Komutunuz bekleniyor...\r\n", 48, 100);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)fsrValues, 10);
 
   if (MLX90640_TestConnection()) {
@@ -83,74 +95,173 @@ int main(void)
 
   while (1)
   {
-    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET)
-    {
-        HAL_Delay(300);
-        int currentFoot = measurementStep + 1;
-        sprintf(msg, "\r\n=== %d. AYAK OLCUMU (%d sn) ===\r\n", currentFoot, 6);
-        HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
+	  if(st_rst){
+		  doReset();
+		  continue;
+	  }
+   if(HAL_GPIO_ReadPin(GPIOC,GPIO_PIN_13) == GPIO_PIN_RESET){
+	   HAL_Delay(250);
+	   if(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET){
+		   if(state == 0){
+			   st_basla = 1;
+		   }
+		   else
+		   {
+			   st_devam = 1;
+		   }
+		   while(HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET);
+	       }
+      }
 
-        // --- 1. TERMAL OLCUM ---
-        uint32_t startT = HAL_GetTick();
-        while (HAL_GetTick() - startT < 6000) {
-            if (MLX90640_GetFrameData(MLX_ADDR, frameData) >= 0) {
-                float ta = MLX90640_GetTa(frameData, &mlx90640);
-                MLX90640_CalculateTo(frameData, &mlx90640, 0.95, ta - 8.0, mlx90640To);
-                if(measurementStep == 0) {
-                    memcpy(foot1_temp, mlx90640To, sizeof(mlx90640To));
-                    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12); // Yeşil LED Blink
-                } else {
-                    memcpy(foot2_temp, mlx90640To, sizeof(mlx90640To));
-                    HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13); // Turuncu LED Blink
-                }
-            }
-            HAL_Delay(200);
-        }
+   if (state == 0) {
+       if (st_basla) {
+           st_basla = 0;
 
-        // --- 2. BASINC OLCUMU ---
-        HAL_UART_Transmit(&huart3, (uint8_t*)"Basinc Kaydi Yapiliyor...\r\n", 27, 100);
-        uint32_t pSum[10] = {0}, pCount = 0, startP = HAL_GetTick();
-        while (HAL_GetTick() - startP < 6000) {
-            for(int i=0; i<10; i++) pSum[i] += fsrValues[i];
-            pCount++;
-            if(measurementStep == 0) HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
-            else HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
-            HAL_Delay(100);
-        }
+           char *m = "ilk ölçüm başlatılıyor\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)m, strlen(m), 100);
 
-        if(measurementStep == 0) {
-            for(int i=0; i<10; i++) foot1_press[i] = pSum[i] / pCount;
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
-            HAL_UART_Transmit(&huart3, (uint8_t*)"1. Ayak Tamam. 2. Ayak Bekleniyor.\r\n", 36, 100);
-            measurementStep = 1;
-        }
-        else {
-            for(int i=0; i<10; i++) foot2_press[i] = pSum[i] / pCount;
-            HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_SET);
+           uint32_t startTemp = HAL_GetTick();
+           while (HAL_GetTick() - startTemp < 6000) {
+               if (st_rst) { doReset(); goto LOOP_CONTINUE; }
 
-            float maxT1, maxT2; int idx1, idx2;
-            SmartAnalysis(foot1_temp, &maxT1, &idx1);
-            SmartAnalysis(foot2_temp, &maxT2, &idx2);
+               if (MLX90640_GetFrameData(MLX_ADDR, frameData) >= 0) {
+                   float ta = MLX90640_GetTa(frameData, &mlx90640);
+                   MLX90640_CalculateTo(frameData, &mlx90640, 0.95, ta - 8.0, mlx90640To);
+                   memcpy(foot1_temp, mlx90640To, sizeof(mlx90640To));
+               }
 
-            CalculateRisk(maxT1, maxT2, foot1_press, foot2_press);
+               HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_12);
+               HAL_Delay(200);
+           }
 
-            HAL_UART_Transmit(&huart3, (uint8_t*)"\r\n=== TUM SENSOR VERILERI (Gram Cinsi) ===\r\n", 43, 100);
-            for(int i=0; i<10; i++) {
-                uint32_t g1 = ADC_to_Grams(foot1_press[i]);
-                uint32_t g2 = ADC_to_Grams(foot2_press[i]);
-                sprintf(msg, "Sensor [%d]: %lu gr | %lu gr\r\n", i, g1, g2);
-                HAL_UART_Transmit(&huart3, (uint8_t*)msg, strlen(msg), 100);
-            }
-            measurementStep = 0;
-        }
-    }
-    HAL_Delay(10);
-  }
-}
+           char *m1 = "Basınc kaydı yapılıyor...\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)m1, strlen(m1), 100);
+
+           uint32_t Psum[10] = {0}, Pcount = 0;
+           uint32_t startPres = HAL_GetTick();
+           while (HAL_GetTick() - startPres < 6000) {
+               if (st_rst) { doReset(); goto LOOP_CONTINUE; }
+
+               for (int i = 0; i < 10; i++) Psum[i] += fsrValues[i];
+               Pcount++;
+               HAL_Delay(100);
+           }
+
+           for (int i = 0; i < 10; i++) foot1_press[i] = Psum[i] / Pcount;
+
+           state = 1;
+           char *m2 = "Birinci bitti, 'devam' bekleniyor...\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)m2, strlen(m2), 100);
+           HAL_GPIO_WritePin(GPIOD, GPIO_PIN_12, GPIO_PIN_SET);
+       }
+   }
+   else if (state == 1) {
+       if (st_devam) {
+           st_devam = 0;
+
+           char *m3 = "İkinci ölçüm başlatılıyor...\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)m3, strlen(m3), 100);
+
+           uint32_t startTemp = HAL_GetTick();
+           while (HAL_GetTick() - startTemp < 6000) {
+               if (st_rst) { doReset(); goto LOOP_CONTINUE; }
+
+               if (MLX90640_GetFrameData(MLX_ADDR, frameData) >= 0) {
+                   float ta = MLX90640_GetTa(frameData, &mlx90640);
+                   MLX90640_CalculateTo(frameData, &mlx90640, 0.95, ta - 8.0, mlx90640To);
+                   memcpy(foot2_temp, mlx90640To, sizeof(mlx90640To));
+               }
+
+               HAL_GPIO_TogglePin(GPIOD, GPIO_PIN_13);
+               HAL_Delay(200);
+           }
+
+           char *m4 = "Basınç kaydı yapılıyor\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)m4, strlen(m4), 100);
+
+           uint32_t Psum[10] = {0}, Pcount = 0;
+           uint32_t startPres = HAL_GetTick();
+           while (HAL_GetTick() - startPres < 6000) {
+               if (st_rst) { doReset(); goto LOOP_CONTINUE; }
+
+               for (int i = 0; i < 10; i++) Psum[i] += fsrValues[i];
+               Pcount++;
+               HAL_Delay(100);
+           }
+
+           for (int i = 0; i < 10; i++) foot2_press[i] = Psum[i] / Pcount;
+
+           float maxT1, maxT2; int idx1, idx2;
+           SmartAnalysis(foot1_temp, &maxT1, &idx1);
+           SmartAnalysis(foot2_temp, &maxT2, &idx2);
+           CalculateRisk(maxT1, maxT2, foot1_press, foot2_press);
+
+           state = 0;
+           char *mf = "Ölçüm başarıyla tamamlandı.\r\n";
+           HAL_UART_Transmit(&huart3, (uint8_t*)mf, strlen(mf), 100);
+       }
+   }
+
+   LOOP_CONTINUE:
+   ;}}
+
+
 
 /* --- DESTEK FONKSIYONLARI --- */
+void doReset(void){
+	st_rst = 0;
+	st_basla = 0;
+	st_devam=0;
 
+	state = 0;
+	measurementStep = 0;
 
+	memset(foot1_temp,0,sizeof(foot1_temp) );
+	memset(foot2_temp,0,sizeof(foot2_temp));
+	memset(foot1_press,0,sizeof(foot1_press));
+	memset(foot2_press,0,sizeof(foot2_press));
+
+	HAL_GPIO_WritePin(GPIOD,GPIO_PIN_12, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13, GPIO_PIN_RESET);
+
+	char*msg = "Sıfırlama işlemi başarılı...\r\n";
+	HAL_UART_Transmit(&huart3, (uint8_t*)msg, (uint16_t)strlen(msg),100);
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){
+
+	if(huart->Instance == USART3){
+		if(rcmd  == '\r' || rcmd == '\n'){
+			cmd[idxcmd] = '\0';
+			if(idxcmd > 0){
+				if(strcmp(cmd, "basla") == 0){
+					st_basla = 1;
+				}else if(strcmp(cmd, "devam") == 0){
+					st_devam = 1;
+				}else if(strcmp(cmd, "rst") == 0){
+					st_rst = 1;
+				}
+				else
+				{
+					char*msg = "Gecersiz komut\r\n";
+				    HAL_UART_Transmit(&huart3, (uint8_t*)msg, (uint16_t)strlen(msg), 100);
+
+				}
+			}
+			idxcmd = 0;
+
+		}
+		else{
+			if(idxcmd < sizeof(cmd) - 1){
+				cmd[idxcmd++] = (char)rcmd;
+			}else{
+				idxcmd = 0;
+			}
+
+		   }
+		HAL_UART_Receive_IT(&huart3, &rcmd,1);
+	    }
+
+}
 
 uint32_t ADC_to_Grams(uint32_t adcVal) {
     if (adcVal < 50) return 0; // Gürültü filtresi
