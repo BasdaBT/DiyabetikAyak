@@ -1,6 +1,0 @@
-../Core/Src/main.c:155:10:ADC_to_Grams	0	static
-../Core/Src/main.c:172:6:CalculateRisk	64	static
-../Core/Src/main.c:203:6:SmartAnalysis	56	static
-../Core/Src/main.c:229:6:SystemClock_Config	96	static
-../Core/Src/main.c:61:5:main	104	static
-../Core/Src/main.c:252:6:Error_Handler	8	static
